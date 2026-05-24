@@ -1,0 +1,16 @@
+# binaries
+/wiki-mcp
+/bin/
+/dist/
+
+# go test artifacts
+*.test
+*.out
+*.prof
+
+# editor
+.vscode/
+.idea/
+
+# os
+.DS_Store
