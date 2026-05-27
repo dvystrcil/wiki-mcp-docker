@@ -45,7 +45,7 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: wiki-mcp-docker-runner
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - uses: actions/checkout@v6
@@ -67,6 +67,12 @@ jobs:
           registry: ${{ env.INTERNAL_REGISTRY }}
           username: ${{ env.HB_USERNAME }}
           password: ${{ env.HB_PASSWORD }}
+
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ env.CICD_APP_CLIENT_ID }}
+          private-key: ${{ env.CICD_APP_PRIVATE_KEY }}
 
       - uses: docker/setup-qemu-action@v4
 
@@ -98,6 +104,34 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Create GitHub release
+        # Patch++ off the latest existing release; mirrors the open-terminal /
+        # mealie-mcp / freecad-mcp pattern. The release.yaml workflow on
+        # release-publish retags Harbor as :vX.Y.Z (and image-updater picks
+        # it up from there per the canonical homelab IU pattern).
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          LATEST_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${REPO}/releases/latest" \
+            | jq -r '.tag_name // "v0.0.0"')
+
+          VERSION=${LATEST_TAG#v}
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f2)
+          PATCH=$(echo $VERSION | cut -d. -f3)
+          NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          curl -sf -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${REPO}/releases" \
+            -d "$(jq -n \
+              --arg tag "$NEW_TAG" \
+              --arg name "$NEW_TAG" \
+              '{tag_name: $tag, name: $name, generate_release_notes: true}')"
 
       - name: Summary
         run: |
