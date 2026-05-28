@@ -42,6 +42,13 @@ const (
 	// GH Actions cold-start + checkout + import + commit + push fits well
 	// within 60s. 90s gives headroom for runner warm-up and TG slowness.
 	importTimeout = 90 * time.Second
+
+	// After n8n reports "imported", the file is on GitHub but our local
+	// /data volume only updates when the git-sync sidecar pulls. Poll
+	// the local store with this budget so callers see the page locally
+	// before the tool returns. Budget = git-sync interval + headroom.
+	localPollBudget   = 35 * time.Second
+	localPollInterval = 1 * time.Second
 )
 
 // importRequest is the JSON we POST to the n8n webhook.
@@ -61,14 +68,15 @@ type importResponse struct {
 	Message string `json:"message,omitempty"` // human-readable detail / suggestions / option list
 }
 
-func addImport(server *mcp.Server, _ *wiki.Store) {
+func addImport(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
 		Name: "wiki_import",
 		Description: "Import a canonical Middle-earth place into the wiki ON DEMAND from Tolkien Gateway. " +
 			"Use this when wiki_search(domain=\"one-ring\", query=<place>) returns no hits for what looks like " +
 			"a real Tolkien place: call wiki_import with the term, then call wiki_lookup with the returned slug. " +
-			"\n\nReturns one of four statuses (read the `status` field and act accordingly):\n" +
-			"  - `imported`: page added; call wiki_lookup(domain=\"one-ring\", slug=<returned slug>) for the full body.\n" +
+			"\n\nReturns one of five statuses (read the `status` field and act accordingly):\n" +
+			"  - `imported`: page added AND visible locally; call wiki_lookup(domain=\"one-ring\", slug=<returned slug>) right away.\n" +
+			"  - `imported_pending`: page added to the remote wiki but the local cache has not synced yet. Wait ~30s and call wiki_lookup. Do NOT name canonical geography for this place until the lookup succeeds.\n" +
 			"  - `not_found`: Tolkien Gateway has no page for this term. The place is non-canonical OR misspelled. " +
 			"DO NOT proceed to name distances/directions; ask the player to clarify or describe vaguely.\n" +
 			"  - `disambiguation`: multiple TG pages match. Ask the player which they meant, then re-call wiki_import.\n" +
@@ -174,6 +182,33 @@ func addImport(server *mcp.Server, _ *wiki.Store) {
 		if out.Tried == "" {
 			out.Tried = args.Term
 		}
+
+		// If n8n reported a successful import, poll the local store until
+		// the git-sync sidecar pulls the new page (so the immediate
+		// wiki_lookup call works). If polling times out, downgrade the
+		// status so the model knows the page isn't visible yet and can
+		// retry rather than fail mysteriously.
+		if out.Status == "imported" && out.Slug != "" {
+			deadline := time.Now().Add(localPollBudget)
+			for time.Now().Before(deadline) {
+				if _, err := store.Lookup(args.Domain, out.Slug); err == nil {
+					// Page visible locally. Annotate the message so the
+					// model sees that wiki_lookup will succeed now.
+					out.Message = out.Message + " (locally visible)"
+					return jsonResult(out), nil
+				}
+				select {
+				case <-callCtx.Done():
+					out.Status = "imported_pending"
+					out.Message = "Import succeeded on remote but local view did not update before request was cancelled. Wait ~30s and call wiki_lookup again."
+					return jsonResult(out), nil
+				case <-time.After(localPollInterval):
+				}
+			}
+			out.Status = "imported_pending"
+			out.Message = fmt.Sprintf("Import succeeded on remote (slug=%s) but local /data has not synced yet. Wait ~30s and call wiki_lookup again — the git-sync sidecar pulls on a schedule.", out.Slug)
+		}
+
 		return jsonResult(out), nil
 	})
 }
