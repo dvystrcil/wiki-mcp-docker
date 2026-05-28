@@ -23,6 +23,7 @@ func RegisterAll(server *mcp.Server, store *wiki.Store) []string {
 		{"wiki_neighbors", addNeighbors},
 		{"wiki_write", addWrite},
 		{"wiki_list_domains", addListDomains},
+		{"wiki_import", addImport},
 	} {
 		t.add(server, store)
 		names = append(names, t.name)
