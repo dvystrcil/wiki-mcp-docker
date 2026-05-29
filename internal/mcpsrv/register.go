@@ -204,7 +204,11 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 		Description: "Create or overwrite a wiki page. Writes to the local mount; a git-sync sidecar in the deploy pod " +
 			"commits + pushes on a separate schedule. WILL REFUSE: writes under raw/ (immutable per AGENTS.md), invalid " +
 			"domain/slug (must be lowercase-kebab), or invalid type (must be entities/concepts/sources/syntheses). " +
-			"Provide the FULL page body including the YAML frontmatter.",
+			"Provide the FULL page body including the YAML frontmatter. " +
+			"The response includes a `dangling` list — any [[wikilink]] in the body you just wrote that doesn't " +
+			"resolve to an existing page in any domain. Each entry is either a target you should write next " +
+			"(offer the author a stub) or a slug typo / speculative reference that should be pruned (offer " +
+			"the author the prune). Resolve before moving on so the link graph stays clean.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -229,7 +233,15 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 		if err := store.Write(args.Domain, args.Type, args.Slug, args.Body); err != nil {
 			return errorResult(err.Error()), nil
 		}
-		return textResult(fmt.Sprintf("wrote wiki/%s/%s/%s.md (%d bytes)", args.Domain, args.Type, args.Slug, len(args.Body))), nil
+		// Surface dangling [[wikilinks]] in the just-written body so the
+		// model sees the deltas inside its own action's response — no
+		// separate audit call needed.
+		dangling, _ := store.DanglingInBody(args.Domain, args.Body)
+		return jsonResult(map[string]any{
+			"path":     fmt.Sprintf("wiki/%s/%s/%s.md", args.Domain, args.Type, args.Slug),
+			"bytes":    len(args.Body),
+			"dangling": dangling,
+		}), nil
 	})
 }
 

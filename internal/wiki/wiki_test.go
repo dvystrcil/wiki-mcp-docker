@@ -408,6 +408,53 @@ func TestAudit_HomelabDomainHasOrphanAndDangling(t *testing.T) {
 	}
 }
 
+// DanglingInBody returns the wikilink targets in `body` that don't
+// resolve to any existing page in any domain — used by wiki_write to
+// surface broken references back to the caller at the moment of the
+// write, so the model can offer stubs without a separate audit call.
+func TestDanglingInBody_FlagsUnresolved(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	// fixture has: one-ring/entities/{del,strider}, one-ring/syntheses/campaign-chronicle
+	body := `# Foo
+
+Some prose.
+
+## Related
+
+- [[strider]]   # resolves in one-ring
+- [[ghost-shard]]  # nowhere
+- [[../syntheses/campaign-chronicle]]  # cross-section, resolves
+- [[bogus-target]] # nowhere
+`
+	dangling, err := s.DanglingInBody("one-ring", body)
+	if err != nil {
+		t.Fatalf("DanglingInBody: %v", err)
+	}
+	want := map[string]bool{"ghost-shard": true, "bogus-target": true}
+	if len(dangling) != 2 {
+		t.Fatalf("dangling = %v; want 2 entries", dangling)
+	}
+	for _, slug := range dangling {
+		if !want[slug] {
+			t.Errorf("unexpected dangling slug %q (want only ghost-shard, bogus-target)", slug)
+		}
+	}
+}
+
+func TestDanglingInBody_ResolvedReturnsEmpty(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	body := "## Related\n\n- [[strider]]\n"
+	dangling, err := s.DanglingInBody("one-ring", body)
+	if err != nil {
+		t.Fatalf("DanglingInBody: %v", err)
+	}
+	if len(dangling) != 0 {
+		t.Errorf("dangling = %v; want empty", dangling)
+	}
+}
+
 // A cross-domain link should NOT be flagged as dangling: del.md links
 // [[../syntheses/campaign-chronicle]] which resolves within one-ring.
 // This test pins that the audit's dangling check respects cross-domain
