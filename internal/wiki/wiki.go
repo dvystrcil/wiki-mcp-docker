@@ -426,6 +426,63 @@ func (s *Store) Audit(domain string) (AuditReport, error) {
 	return report, nil
 }
 
+// DanglingInBody scans the given page body for [[wikilink]] targets
+// and returns those that don't resolve to any existing page in any
+// domain. Same resolution semantics as Neighbors and Audit (in-domain
+// first, then cross-domain fallback). Used by wiki_write to surface
+// new broken references at the moment of the write — the model sees
+// the deltas in its own action's response, no separate audit call
+// needed.
+func (s *Store) DanglingInBody(domain, body string) ([]string, error) {
+	otherDomains, err := s.ListDomains()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	dangling := []string{}
+	for _, m := range wikilinkRe.FindAllStringSubmatch(body, -1) {
+		target := strings.TrimSpace(m[1])
+		parts := strings.Split(target, "/")
+		clean := []string{}
+		for _, x := range parts {
+			if x == "" || x == "." || x == ".." {
+				continue
+			}
+			clean = append(clean, x)
+		}
+		if len(clean) == 0 {
+			continue
+		}
+		linkSlug := strings.TrimSuffix(clean[len(clean)-1], ".md")
+		if !slugRe.MatchString(linkSlug) {
+			continue
+		}
+		if seen[linkSlug] {
+			continue
+		}
+		seen[linkSlug] = true
+
+		if _, err := s.Lookup(domain, linkSlug); err == nil {
+			continue
+		}
+		resolved := false
+		for _, d := range otherDomains {
+			if d == domain {
+				continue
+			}
+			if _, err := s.Lookup(d, linkSlug); err == nil {
+				resolved = true
+				break
+			}
+		}
+		if !resolved {
+			dangling = append(dangling, linkSlug)
+		}
+	}
+	sort.Strings(dangling)
+	return dangling, nil
+}
+
 // Write creates or overwrites a page. Refuses if domain looks like a path
 // traversal, if slug isn't a clean lowercase-kebab, if typeDir isn't one of
 // the four canonical type-dirs, or if domain is "raw" (the raw/ tree is
