@@ -351,3 +351,74 @@ func TestWrite_RejectsRawSourcesPath(t *testing.T) {
 		t.Error("Write should reject domain=raw (raw/ is immutable per AGENTS.md)")
 	}
 }
+
+// ---- audit -----------------------------------------------------------------
+
+// fixtureTree has:
+//   one-ring/entities/del.md          → links [[strider]] + [[../syntheses/campaign-chronicle]]
+//   one-ring/entities/strider.md      → links [[del]]
+//   one-ring/syntheses/campaign-chronicle.md (no wikilinks)
+//   homelab/entities/owui.md          → links [[mcp-client]] (dangling)
+//
+// Expected audit on one-ring: 3 pages, no orphans (every page has an incoming
+// link), no dangling, hubs include all 3 with incoming=1.
+// Expected audit on homelab: 1 page, 1 orphan (owui), 1 dangling (mcp-client).
+func TestAudit_OneRingDomain(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	report, err := s.Audit("one-ring")
+	if err != nil {
+		t.Fatalf("Audit: %v", err)
+	}
+	if report.Domain != "one-ring" {
+		t.Errorf("Domain = %q; want one-ring", report.Domain)
+	}
+	if report.TotalPages != 3 {
+		t.Errorf("TotalPages = %d; want 3", report.TotalPages)
+	}
+	if len(report.Orphans) != 0 {
+		t.Errorf("Orphans = %v; want none", report.Orphans)
+	}
+	if len(report.Dangling) != 0 {
+		t.Errorf("Dangling = %v; want none", report.Dangling)
+	}
+}
+
+func TestAudit_HomelabDomainHasOrphanAndDangling(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	report, err := s.Audit("homelab")
+	if err != nil {
+		t.Fatalf("Audit: %v", err)
+	}
+	if report.TotalPages != 1 {
+		t.Errorf("TotalPages = %d; want 1", report.TotalPages)
+	}
+	if len(report.Orphans) != 1 || report.Orphans[0] != "owui" {
+		t.Errorf("Orphans = %v; want [owui]", report.Orphans)
+	}
+	if len(report.Dangling) != 1 || report.Dangling[0].Slug != "mcp-client" {
+		t.Errorf("Dangling = %+v; want one entry for mcp-client", report.Dangling)
+	}
+	if len(report.Dangling) > 0 {
+		got := report.Dangling[0]
+		if len(got.ReferencedFrom) != 1 || got.ReferencedFrom[0] != "owui" {
+			t.Errorf("Dangling[0].ReferencedFrom = %v; want [owui]", got.ReferencedFrom)
+		}
+	}
+}
+
+// A cross-domain link should NOT be flagged as dangling: del.md links
+// [[../syntheses/campaign-chronicle]] which resolves within one-ring.
+// This test pins that the audit's dangling check respects cross-domain
+// resolution (same as Neighbors does).
+func TestAudit_DoesNotFlagCrossDomainResolved(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	report, _ := s.Audit("one-ring")
+	for _, d := range report.Dangling {
+		if d.Slug == "campaign-chronicle" {
+			t.Errorf("campaign-chronicle should resolve cross-section in one-ring, but flagged as dangling")
+		}
+	}
+}

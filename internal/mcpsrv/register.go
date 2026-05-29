@@ -24,6 +24,7 @@ func RegisterAll(server *mcp.Server, store *wiki.Store) []string {
 		{"wiki_write", addWrite},
 		{"wiki_list_domains", addListDomains},
 		{"wiki_import", addImport},
+		{"wiki_audit", addAudit},
 	} {
 		t.add(server, store)
 		names = append(names, t.name)
@@ -246,5 +247,38 @@ func addListDomains(server *mcp.Server, store *wiki.Store) {
 			return errorResult(err.Error()), nil
 		}
 		return jsonResult(map[string]any{"domains": domains}), nil
+	})
+}
+
+// ---- tool: wiki_audit ----
+
+func addAudit(server *mcp.Server, store *wiki.Store) {
+	tool := &mcp.Tool{
+		Name: "wiki_audit",
+		Description: "Audit the link-graph health of a domain. Returns hubs (most-linked-to pages), " +
+			"orphans (pages no one links to), and dangling wikilink targets that don't resolve to any " +
+			"existing page in any domain. Reports state; does NOT mutate. Call this at the end of a " +
+			"writing session — orphans are entities to weave in, dangling targets are entities to write " +
+			"next (or links to remove if the target was speculative).",
+		InputSchema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"domain": {Type: "string", Description: "Domain to audit (e.g., fiction, one-ring, homelab)."},
+			},
+			Required: []string{"domain"},
+		},
+	}
+	server.AddTool(tool, func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args struct {
+			Domain string `json:"domain"`
+		}
+		if e := decodeArgs(req, &args); e != nil {
+			return e, nil
+		}
+		report, err := store.Audit(args.Domain)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		return jsonResult(report), nil
 	})
 }

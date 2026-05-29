@@ -267,6 +267,165 @@ func (s *Store) Neighbors(domain, slug string) ([]Page, error) {
 	return out, nil
 }
 
+// HubEntry is one row in AuditReport.Hubs — a page ranked by how many
+// other pages link to it.
+type HubEntry struct {
+	Slug          string `json:"slug"`
+	IncomingCount int    `json:"incoming_count"`
+}
+
+// DanglingEntry is one row in AuditReport.Dangling — a wikilink target
+// that doesn't resolve to any existing page in any domain.
+type DanglingEntry struct {
+	Slug           string   `json:"slug"`
+	ReferencedFrom []string `json:"referenced_from"`
+}
+
+// AuditReport summarizes link-graph health for one domain. Reports state;
+// does not mutate. Callers (model, script, human) decide what to do with
+// the findings.
+type AuditReport struct {
+	Domain     string          `json:"domain"`
+	TotalPages int             `json:"total_pages"`
+	Hubs       []HubEntry      `json:"hubs"`
+	Orphans    []string        `json:"orphans"`
+	Dangling   []DanglingEntry `json:"dangling"`
+}
+
+// Audit walks every page in `domain`, extracts its wikilinks, and
+// reports:
+//   - Hubs: pages with the most incoming links (top-10, sorted desc).
+//   - Orphans: pages with zero incoming links from inside `domain`.
+//   - Dangling: wikilink targets that don't resolve to any page in any
+//     domain (cross-domain matches are NOT flagged).
+//
+// Cross-section / cross-domain wikilinks are resolved the same way
+// Neighbors does, so the audit and the navigation agree.
+func (s *Store) Audit(domain string) (AuditReport, error) {
+	pages, err := s.ListPages(domain)
+	if err != nil {
+		return AuditReport{}, err
+	}
+	report := AuditReport{
+		Domain:     domain,
+		TotalPages: len(pages),
+		Hubs:       []HubEntry{},
+		Orphans:    []string{},
+		Dangling:   []DanglingEntry{},
+	}
+
+	inDomain := make(map[string]bool, len(pages))
+	for _, p := range pages {
+		inDomain[p.Slug] = true
+	}
+
+	incoming := make(map[string]map[string]bool)
+	dangling := make(map[string]map[string]bool)
+
+	otherDomains, _ := s.ListDomains()
+
+	for _, p := range pages {
+		seen := map[string]bool{}
+		for _, m := range wikilinkRe.FindAllStringSubmatch(p.Body, -1) {
+			target := strings.TrimSpace(m[1])
+			parts := strings.Split(target, "/")
+			clean := []string{}
+			for _, x := range parts {
+				if x == "" || x == "." || x == ".." {
+					continue
+				}
+				clean = append(clean, x)
+			}
+			if len(clean) == 0 {
+				continue
+			}
+			linkSlug := strings.TrimSuffix(clean[len(clean)-1], ".md")
+			if !slugRe.MatchString(linkSlug) {
+				continue
+			}
+			if linkSlug == p.Slug || seen[linkSlug] {
+				continue
+			}
+			seen[linkSlug] = true
+
+			if inDomain[linkSlug] {
+				if incoming[linkSlug] == nil {
+					incoming[linkSlug] = make(map[string]bool)
+				}
+				incoming[linkSlug][p.Slug] = true
+				continue
+			}
+			// Not in domain — check other domains (mirrors Neighbors).
+			resolved := false
+			for _, d := range otherDomains {
+				if d == domain {
+					continue
+				}
+				if _, err := s.Lookup(d, linkSlug); err == nil {
+					resolved = true
+					break
+				}
+			}
+			if resolved {
+				continue
+			}
+			if dangling[linkSlug] == nil {
+				dangling[linkSlug] = make(map[string]bool)
+			}
+			dangling[linkSlug][p.Slug] = true
+		}
+	}
+
+	// Hubs: sort by IncomingCount desc, then slug asc for stable output.
+	type pair struct {
+		slug  string
+		count int
+	}
+	hubPairs := make([]pair, 0, len(pages))
+	for _, p := range pages {
+		hubPairs = append(hubPairs, pair{p.Slug, len(incoming[p.Slug])})
+	}
+	sort.Slice(hubPairs, func(i, j int) bool {
+		if hubPairs[i].count != hubPairs[j].count {
+			return hubPairs[i].count > hubPairs[j].count
+		}
+		return hubPairs[i].slug < hubPairs[j].slug
+	})
+	const hubLimit = 10
+	for i, h := range hubPairs {
+		if i >= hubLimit {
+			break
+		}
+		report.Hubs = append(report.Hubs, HubEntry{Slug: h.slug, IncomingCount: h.count})
+	}
+
+	// Orphans: zero incoming.
+	for _, p := range pages {
+		if len(incoming[p.Slug]) == 0 {
+			report.Orphans = append(report.Orphans, p.Slug)
+		}
+	}
+	sort.Strings(report.Orphans)
+
+	// Dangling: sort by slug for stable output.
+	for slug, sources := range dangling {
+		refs := make([]string, 0, len(sources))
+		for s := range sources {
+			refs = append(refs, s)
+		}
+		sort.Strings(refs)
+		report.Dangling = append(report.Dangling, DanglingEntry{
+			Slug:           slug,
+			ReferencedFrom: refs,
+		})
+	}
+	sort.Slice(report.Dangling, func(i, j int) bool {
+		return report.Dangling[i].Slug < report.Dangling[j].Slug
+	})
+
+	return report, nil
+}
+
 // Write creates or overwrites a page. Refuses if domain looks like a path
 // traversal, if slug isn't a clean lowercase-kebab, if typeDir isn't one of
 // the four canonical type-dirs, or if domain is "raw" (the raw/ tree is
