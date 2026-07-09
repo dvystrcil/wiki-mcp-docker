@@ -45,6 +45,11 @@ var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 var domainRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 var wikilinkRe = regexp.MustCompile(`\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]`)
 
+// ErrPageNotFound reports a well-formed (domain, slug) that resolves to no
+// page on disk. Callers must be able to tell this apart from a validation
+// error: only a missing page has a recovery path worth offering.
+var ErrPageNotFound = errors.New("page not found")
+
 // Store is a filesystem-backed view of the wiki tree.
 type Store struct {
 	root string
@@ -160,7 +165,7 @@ func (s *Store) Lookup(domain, slug string) (Page, error) {
 			return s.read(domain, tdir, slug)
 		}
 	}
-	return Page{}, fmt.Errorf("page %q not found in domain %q", slug, domain)
+	return Page{}, fmt.Errorf("%w: %q in domain %q", ErrPageNotFound, slug, domain)
 }
 
 // Search returns pages where `query` (case-insensitive) appears in body,

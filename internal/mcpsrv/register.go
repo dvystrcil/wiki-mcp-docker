@@ -4,6 +4,7 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/dvystrcil/wiki-mcp-docker/internal/wiki"
@@ -70,11 +71,11 @@ func decodeArgs(req *mcp.CallToolRequest, dst any) *mcp.CallToolResult {
 // pageSummary renders a Page in JSON-friendly form for responses.
 func pageSummary(p wiki.Page, includeBody bool) map[string]any {
 	out := map[string]any{
-		"domain":   p.Domain,
-		"type":     p.Type,
-		"slug":     p.Slug,
-		"aliases":  p.Aliases,
-		"tags":     p.Tags,
+		"domain":  p.Domain,
+		"type":    p.Type,
+		"slug":    p.Slug,
+		"aliases": p.Aliases,
+		"tags":    p.Tags,
 	}
 	if includeBody {
 		out["body"] = p.Body
@@ -109,10 +110,38 @@ func addLookup(server *mcp.Server, store *wiki.Store) {
 		}
 		p, err := store.Lookup(args.Domain, args.Slug)
 		if err != nil {
+			if errors.Is(err, wiki.ErrPageNotFound) {
+				return errorResult(notFoundMessage(args.Domain, args.Slug, err)), nil
+			}
 			return errorResult(err.Error()), nil
 		}
 		return jsonResult(pageSummary(p, true)), nil
 	})
+}
+
+// importableDomains are the wiki domains wiki_import can actually fill.
+// wiki_import sources from Tolkien Gateway, so naming it as a recovery path
+// for any other domain would point the model at a tool that cannot serve it.
+var importableDomains = map[string]bool{"one-ring": true}
+
+// notFoundMessage renders wiki_lookup's not-found error and, where an import
+// path exists, names wiki_import inline. Stating the escape hatch in
+// wiki_import's own description was not enough to get the model to reach for
+// it (homelab#312: zero calls across 40 prompts), so the recovery path has to
+// travel in the response the model is already reading.
+func notFoundMessage(domain, slug string, err error) string {
+	if !importableDomains[domain] {
+		return err.Error()
+	}
+	return fmt.Sprintf(
+		"%v.\n\n"+
+			"If %q is a real, canonical Tolkien term, your next action should be "+
+			"wiki_import(domain=%q, term=%q). That fetches it from Tolkien Gateway and "+
+			"stores it, so this lookup succeeds now and in every later conversation.\n\n"+
+			"Do NOT answer from training data without calling wiki_import first. "+
+			"If wiki_import returns not_found, the term is non-canonical or misspelled — "+
+			"say so plainly rather than inventing detail.",
+		err, slug, domain, slug)
 }
 
 // ---- tool: wiki_search ----
