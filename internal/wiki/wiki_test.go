@@ -8,6 +8,7 @@
 package wiki
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,6 +219,31 @@ func TestLookup_NotFound(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for missing slug")
 	}
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Errorf("missing page should wrap ErrPageNotFound, got %v", err)
+	}
+}
+
+// A missing page and a malformed slug are different failures: callers offer
+// an import path for the former but not the latter.
+func TestLookup_ValidationErrorsAreNotPageNotFound(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+
+	for _, tc := range []struct{ name, domain, slug string }{
+		{"invalid slug", "one-ring", "Not A Slug"},
+		{"invalid domain", "One Ring", "nobody"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.Lookup(tc.domain, tc.slug)
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			if errors.Is(err, ErrPageNotFound) {
+				t.Errorf("validation error must not wrap ErrPageNotFound, got %v", err)
+			}
+		})
+	}
 }
 
 // ---- search -----------------------------------------------------------------
@@ -355,10 +381,11 @@ func TestWrite_RejectsRawSourcesPath(t *testing.T) {
 // ---- audit -----------------------------------------------------------------
 
 // fixtureTree has:
-//   one-ring/entities/del.md          → links [[strider]] + [[../syntheses/campaign-chronicle]]
-//   one-ring/entities/strider.md      → links [[del]]
-//   one-ring/syntheses/campaign-chronicle.md (no wikilinks)
-//   homelab/entities/owui.md          → links [[mcp-client]] (dangling)
+//
+//	one-ring/entities/del.md          → links [[strider]] + [[../syntheses/campaign-chronicle]]
+//	one-ring/entities/strider.md      → links [[del]]
+//	one-ring/syntheses/campaign-chronicle.md (no wikilinks)
+//	homelab/entities/owui.md          → links [[mcp-client]] (dangling)
 //
 // Expected audit on one-ring: 3 pages, no orphans (every page has an incoming
 // link), no dangling, hubs include all 3 with incoming=1.
