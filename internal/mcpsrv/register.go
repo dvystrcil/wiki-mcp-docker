@@ -177,13 +177,38 @@ func addSearch(server *mcp.Server, store *wiki.Store) {
 		for i, p := range pages {
 			results[i] = pageSummary(p, false)
 		}
-		return jsonResult(map[string]any{
+		out := map[string]any{
 			"domain":  args.Domain,
 			"query":   args.Query,
 			"hits":    len(results),
 			"results": results,
-		}), nil
+		}
+		if len(results) == 0 && importableDomains[args.Domain] {
+			out["hint"] = zeroHitHint(args.Domain, args.Query)
+		}
+		return jsonResult(out), nil
 	})
+}
+
+// zeroHitHint names wiki_import on an empty search result. A zero-hit search
+// is where the model actually gets stuck — 8 of 9 dead ends across the AC4a
+// eval runs, against 1 for wiki_lookup's not-found. Saying so in the tool
+// description and the system prompt did not move it; this puts the recovery
+// path in the result the model is reading.
+//
+// The query is often a phrase ("Grey Havens Mithlond to Rivendell road"),
+// not a page name, so the hint asks for the place name rather than echoing
+// the query into term=.
+func zeroHitHint(domain, query string) string {
+	return fmt.Sprintf(
+		"No wiki page matched %q. If that query names a real, canonical Tolkien "+
+			"place, call wiki_import(domain=%q, term=\"<the place name>\") now — "+
+			"pass the place itself (e.g. \"Fornost\"), not the whole query — then "+
+			"wiki_lookup the slug it returns.\n\n"+
+			"Do NOT answer from training data without trying wiki_import first. "+
+			"If wiki_import returns not_found, the place is non-canonical or "+
+			"misspelled — say so plainly rather than inventing detail.",
+		query, domain)
 }
 
 // ---- tool: wiki_neighbors ----
