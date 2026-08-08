@@ -51,9 +51,16 @@ func main() {
 	log.Printf("Registered %d tool(s): %v", len(registered), registered)
 
 	if *httpAddr != "" {
+		// Stateless: true (homelab#755) -- without it the SDK requires the
+		// Mcp-Session-Id from a session's initialize handshake to be
+		// re-presented to the SAME replica on every subsequent request. A
+		// plain round-robin Service would break that the moment a
+		// follow-up lands on a different pod, blocking safe horizontal
+		// scaling. Matches the fix already applied to the Python
+		// (FastMCP) wrappers' stateless_http=True.
 		mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 			return server
-		}, nil)
+		}, &mcp.StreamableHTTPOptions{Stateless: true})
 
 		mux := http.NewServeMux()
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
