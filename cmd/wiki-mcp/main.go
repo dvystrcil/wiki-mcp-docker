@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/dvystrcil/wiki-mcp-docker/internal/mcpsrv"
 	"github.com/dvystrcil/wiki-mcp-docker/internal/wiki"
@@ -32,6 +33,10 @@ func main() {
 	httpAddr := flag.String("http",
 		envOr("HTTP_ADDR", ""),
 		"If set, serve MCP over HTTP at this address (e.g. ':8080'). Otherwise stdio.")
+	schemaPath := flag.String("schema",
+		envOr("WIKI_SCHEMA", ""),
+		"llm-wiki scripts/schema.json for wiki_write's schema check. Default: <wiki-root>/../scripts/schema.json "+
+			"(the same llm-wiki checkout). Missing = the check is off, and wiki_write says so.")
 	flag.Parse()
 
 	log.Printf("Starting wiki-mcp")
@@ -40,6 +45,16 @@ func main() {
 	store, err := wiki.NewStore(*wikiRoot)
 	if err != nil {
 		log.Fatalf("open wiki store: %v", err)
+	}
+	sp := *schemaPath
+	if sp == "" {
+		sp = filepath.Join(filepath.Dir(store.Root()), "scripts", "schema.json")
+	}
+	if sc, err := wiki.LoadSchema(sp); err != nil {
+		log.Printf("WARNING: wiki_write schema check OFF (%v)", err)
+	} else {
+		store.SetSchema(sc)
+		log.Printf("Schema: %s (%d page types)", sp, len(sc.RequiredFrontmatter))
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{

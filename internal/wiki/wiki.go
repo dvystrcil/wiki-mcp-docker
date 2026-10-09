@@ -52,7 +52,20 @@ var ErrPageNotFound = errors.New("page not found")
 
 // Store is a filesystem-backed view of the wiki tree.
 type Store struct {
-	root string
+	root   string
+	schema *Schema // llm-wiki scripts/schema.json; nil = write-time check off
+}
+
+// SetSchema enables wiki_write's schema check (wiki-mcp-docker#1).
+func (s *Store) SetSchema(sc *Schema) { s.schema = sc }
+
+// ValidatePage checks a body against the schema. checked is false when no
+// schema is loaded, so a caller can never mistake "not checked" for "clean".
+func (s *Store) ValidatePage(domain, typeDir, body string) (violations []Violation, checked bool) {
+	if s.schema == nil {
+		return []Violation{}, false
+	}
+	return s.schema.Validate(domain, typeDir, body), true
 }
 
 // Page is one parsed wiki page.
