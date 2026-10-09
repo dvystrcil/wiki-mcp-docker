@@ -28,6 +28,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // PageTypeDirs are the four canonical type directories under each domain.
@@ -52,20 +54,60 @@ var ErrPageNotFound = errors.New("page not found")
 
 // Store is a filesystem-backed view of the wiki tree.
 type Store struct {
-	root   string
-	schema *Schema // llm-wiki scripts/schema.json; nil = write-time check off
+	root string
+
+	// llm-wiki scripts/schema.json for wiki_write's check (wiki-mcp-docker#1).
+	// Re-read whenever the file appears or its mtime changes: it lives in the
+	// git-synced checkout, which can land after startup (2026-10-09: git-sync
+	// was stuck, the pod started without it, and a startup-only load left the
+	// check off until a restart). nil schema = check off.
+	schemaMu    sync.Mutex
+	schemaPath  string
+	schemaMtime time.Time
+	schema      *Schema
 }
 
-// SetSchema enables wiki_write's schema check (wiki-mcp-docker#1).
-func (s *Store) SetSchema(sc *Schema) { s.schema = sc }
+// SetSchema enables wiki_write's schema check with a fixed schema (tests).
+func (s *Store) SetSchema(sc *Schema) {
+	s.schemaMu.Lock()
+	defer s.schemaMu.Unlock()
+	s.schema, s.schemaPath = sc, ""
+}
+
+// SetSchemaPath enables the check from a file, re-read when it changes.
+func (s *Store) SetSchemaPath(path string) {
+	s.schemaMu.Lock()
+	defer s.schemaMu.Unlock()
+	s.schemaPath, s.schemaMtime, s.schema = path, time.Time{}, nil
+}
+
+func (s *Store) currentSchema() *Schema {
+	s.schemaMu.Lock()
+	defer s.schemaMu.Unlock()
+	if s.schemaPath == "" {
+		return s.schema
+	}
+	st, err := os.Stat(s.schemaPath)
+	if err != nil {
+		s.schema = nil
+		return nil
+	}
+	if s.schema == nil || !st.ModTime().Equal(s.schemaMtime) {
+		if sc, err := LoadSchema(s.schemaPath); err == nil {
+			s.schema, s.schemaMtime = sc, st.ModTime()
+		}
+	}
+	return s.schema
+}
 
 // ValidatePage checks a body against the schema. checked is false when no
-// schema is loaded, so a caller can never mistake "not checked" for "clean".
+// schema is available, so a caller can never mistake "not checked" for "clean".
 func (s *Store) ValidatePage(domain, typeDir, body string) (violations []Violation, checked bool) {
-	if s.schema == nil {
+	sc := s.currentSchema()
+	if sc == nil {
 		return []Violation{}, false
 	}
-	return s.schema.Validate(domain, typeDir, body), true
+	return sc.Validate(domain, typeDir, body), true
 }
 
 // Page is one parsed wiki page.
