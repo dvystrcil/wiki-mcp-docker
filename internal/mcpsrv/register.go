@@ -262,7 +262,12 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 			"The response includes a `dangling` list — any [[wikilink]] in the body you just wrote that doesn't " +
 			"resolve to an existing page in any domain. Each entry is either a target you should write next " +
 			"(offer the author a stub) or a slug typo / speculative reference that should be pruned (offer " +
-			"the author the prune). Resolve before moving on so the link graph stays clean.",
+			"the author the prune). Resolve before moving on so the link graph stays clean. " +
+			"It also includes `schema_violations` -- every way the page breaks the domain's page schema " +
+			"(missing frontmatter `type`, missing required frontmatter keys, missing required `## ` sections, " +
+			"type/domain not matching the path). The page IS written either way; if the list is non-empty, " +
+			"rewrite the page to fix every entry before moving on. `schema_checked: false` means no schema " +
+			"was available, not that the page is clean.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -291,10 +296,16 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 		// model sees the deltas inside its own action's response — no
 		// separate audit call needed.
 		dangling, _ := store.DanglingInBody(args.Domain, args.Body)
+		// Lenient schema check (wiki-mcp-docker#1): the write has landed;
+		// the violations ride back with it, like `dangling`, so the model
+		// fixes them next turn instead of a human weeks later.
+		violations, checked := store.ValidatePage(args.Domain, args.Type, args.Body)
 		return jsonResult(map[string]any{
-			"path":     fmt.Sprintf("wiki/%s/%s/%s.md", args.Domain, args.Type, args.Slug),
-			"bytes":    len(args.Body),
-			"dangling": dangling,
+			"path":              fmt.Sprintf("wiki/%s/%s/%s.md", args.Domain, args.Type, args.Slug),
+			"bytes":             len(args.Body),
+			"dangling":          dangling,
+			"schema_checked":    checked,
+			"schema_violations": violations,
 		}), nil
 	})
 }
