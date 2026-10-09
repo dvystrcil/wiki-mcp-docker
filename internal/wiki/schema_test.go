@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 )
 
 // A schema.json in the shape llm-wiki's `_schema.py --write-json` emits
@@ -146,5 +148,44 @@ func TestValidate_DomainWithoutOverrideUsesDefaultSections(t *testing.T) {
 func TestLoadSchema_MissingFileIsAnError(t *testing.T) {
 	if _, err := LoadSchema(filepath.Join(t.TempDir(), "nope.json")); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+// The schema is read from the git-synced llm-wiki checkout. On 2026-10-09 the
+// pod started before that checkout had schema.json (git-sync was stuck), so a
+// startup-only load left the check OFF until a restart. The store re-reads
+// the file whenever it appears or changes.
+func TestStore_PicksUpSchemaThatAppearsOrChangesAfterStartup(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "fiction", "entities"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "schema.json")
+	store.SetSchemaPath(p)
+	if _, checked := store.ValidatePage("fiction", "entities", "x"); checked {
+		t.Fatal("no file yet: must report unchecked")
+	}
+	if err := os.WriteFile(p, []byte(testSchemaJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vs, checked := store.ValidatePage("fiction", "entities", "no frontmatter")
+	if !checked || len(vs) != 1 || vs[0].Rule != "missing_frontmatter" {
+		t.Fatalf("after the file appears: checked=%v vs=%v", checked, vs)
+	}
+	// A changed schema (an extra required section) is used without a restart.
+	changed := strings.Replace(testSchemaJSON, `"## Identity", "## Related", "## Open Questions"]}}`,
+		`"## Identity", "## Related", "## Open Questions", "## Voice"]}}`, 1)
+	future := time.Now().Add(2 * time.Second)
+	if err := os.WriteFile(p, []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chtimes(p, future, future)
+	vs, _ = store.ValidatePage("fiction", "entities", goodFictionEntity)
+	if len(vs) != 1 || vs[0].Rule != "missing_section" {
+		t.Fatalf("changed schema not picked up: %v", vs)
 	}
 }

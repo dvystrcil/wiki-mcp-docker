@@ -50,10 +50,12 @@ func main() {
 	if sp == "" {
 		sp = filepath.Join(filepath.Dir(store.Root()), "scripts", "schema.json")
 	}
+	// Re-read on change, so a checkout that git-sync updates (or that lands
+	// after startup) is picked up without a restart.
+	store.SetSchemaPath(sp)
 	if sc, err := wiki.LoadSchema(sp); err != nil {
-		log.Printf("WARNING: wiki_write schema check OFF (%v)", err)
+		log.Printf("WARNING: wiki_write schema check off until %s is readable (%v)", sp, err)
 	} else {
-		store.SetSchema(sc)
 		log.Printf("Schema: %s (%d page types)", sp, len(sc.RequiredFrontmatter))
 	}
 
