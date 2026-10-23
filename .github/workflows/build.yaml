@@ -17,6 +17,11 @@ on:
       - '.github/CODEOWNERS'
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release (and deploy) after the build. The CVE loop sets false, verifies the scanned :dev, then releases (homelab#1694)'
+        type: boolean
+        default: true
 
 env:
   INTERNAL_REGISTRY: harbor-core.harbor.svc.cluster.local
@@ -106,6 +111,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.INTERNAL_REGISTRY }}/${{ env.PROJECT }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
 
       - name: Create GitHub release
+        if: github.event_name != 'workflow_dispatch' || inputs.release
         uses: dvystrcil/release-action@v0.1.1
         with:
           token: ${{ steps.app-token.outputs.token }}
