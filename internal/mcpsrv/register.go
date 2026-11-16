@@ -89,24 +89,36 @@ func pageSummary(p wiki.Page, includeBody bool) map[string]any {
 func addLookup(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
 		Name: "wiki_lookup",
-		Description: "Fetch a single wiki page by its (domain, slug). Returns the page's frontmatter, body, and metadata. " +
-			"Use this when you know the exact page you need. For finding pages by content/keywords, use wiki_search instead.",
+		Description: "Fetch a single wiki page by its (domain, slug). Returns the page's frontmatter, body, metadata, " +
+			"`sections` (its headings) and `total_chars`. Use this when you know the exact page you need. For finding pages " +
+			"by content/keywords, use wiki_search instead. Pages can be long: pass `section` to get one section, or " +
+			"`max_chars` to cap the body (then `offset` = `next_offset` for the rest). " +
+			"Before rewriting an existing page with wiki_write, read it in full (no section, no max_chars).",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
-				"domain": {Type: "string", Description: "Wiki domain, e.g. \"one-ring\" or \"homelab\"."},
-				"slug":   {Type: "string", Description: "Page slug (filename without .md), e.g. \"del\" or \"mcp-client\"."},
+				"domain":    {Type: "string", Description: "Wiki domain, e.g. \"one-ring\" or \"homelab\"."},
+				"slug":      {Type: "string", Description: "Page slug (filename without .md), e.g. \"del\" or \"mcp-client\"."},
+				"section":   {Type: "string", Description: "Optional. Return only this section (a heading from `sections`, case-insensitive), up to the next heading of the same or higher level."},
+				"max_chars": {Type: "integer", Description: "Optional. Cap the returned body at this many characters. If `truncated` is true, call again with `offset` = `next_offset`."},
+				"offset":    {Type: "integer", Description: "Optional. Where to start in the body (or section), from a previous `next_offset`. Default 0."},
 			},
 			Required: []string{"domain", "slug"},
 		},
 	}
 	server.AddTool(tool, func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args struct {
-			Domain string `json:"domain"`
-			Slug   string `json:"slug"`
+			Domain   string `json:"domain"`
+			Slug     string `json:"slug"`
+			Section  string `json:"section"`
+			MaxChars int    `json:"max_chars"`
+			Offset   int    `json:"offset"`
 		}
 		if e := decodeArgs(req, &args); e != nil {
 			return e, nil
+		}
+		if args.MaxChars < 0 || args.Offset < 0 {
+			return errorResult("max_chars and offset must be >= 0"), nil
 		}
 		p, err := store.Lookup(args.Domain, args.Slug)
 		if err != nil {
@@ -115,7 +127,26 @@ func addLookup(server *mcp.Server, store *wiki.Store) {
 			}
 			return errorResult(err.Error()), nil
 		}
-		return jsonResult(pageSummary(p, true)), nil
+		out := pageSummary(p, true)
+		hs := headings(p.Body)
+		out["sections"] = sectionNames(hs)
+		text := p.Body
+		if args.Section != "" {
+			sec, matched, ok := sectionBody(p.Body, hs, args.Section)
+			if !ok {
+				return errorResult(unknownSection(args.Section, hs)), nil
+			}
+			text = sec
+			out["section"] = matched
+		}
+		page, next := window(text, args.Offset, args.MaxChars)
+		out["body"] = page
+		out["total_chars"] = len(text)
+		out["truncated"] = next >= 0
+		if next >= 0 {
+			out["next_offset"] = next
+		}
+		return jsonResult(out), nil
 	})
 }
 
