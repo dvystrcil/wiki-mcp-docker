@@ -35,6 +35,14 @@ func RegisterAll(server *mcp.Server, store *wiki.Store) []string {
 
 // ---- helpers ----
 
+// readOnly marks a tool that only reads the wiki. Clients that ask before a
+// tool that might write (TinyWebUI's toolApproval 'writes') treat a tool with
+// no annotation as a write, so without it every wiki_search asked the author.
+// wiki_write and wiki_import change things and carry none.
+func readOnly() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{ReadOnlyHint: true}
+}
+
 func jsonResult(v any) *mcp.CallToolResult {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -88,7 +96,8 @@ func pageSummary(p wiki.Page, includeBody bool) map[string]any {
 
 func addLookup(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
-		Name: "wiki_lookup",
+		Name:        "wiki_lookup",
+		Annotations: readOnly(),
 		Description: "Fetch a single wiki page by its (domain, slug). Returns the page's frontmatter, body, metadata, " +
 			"`sections` (its headings) and `total_chars`. Use this when you know the exact page you need. For finding pages " +
 			"by content/keywords, use wiki_search instead. Pages can be long: pass `section` to get one section, or " +
@@ -179,7 +188,8 @@ func notFoundMessage(domain, slug string, err error) string {
 
 func addSearch(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
-		Name: "wiki_search",
+		Name:        "wiki_search",
+		Annotations: readOnly(),
 		Description: "Search a domain's wiki pages by keyword. Matches against aliases, tags, slug, and body — case-insensitive. " +
 			"Returns pages sorted by relevance (alias/tag hits > slug hits > body hits). Returns the metadata of each hit; " +
 			"call wiki_lookup to retrieve full page bodies.",
@@ -246,7 +256,8 @@ func zeroHitHint(domain, query string) string {
 
 func addNeighbors(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
-		Name: "wiki_neighbors",
+		Name:        "wiki_neighbors",
+		Annotations: readOnly(),
 		Description: "Return all pages directly linked from the given page via [[wikilink]] syntax. Handles in-domain, " +
 			"cross-section, and cross-domain links. Only RESOLVED links appear (broken wikilinks are silently skipped).",
 		InputSchema: &jsonschema.Schema{
@@ -346,6 +357,7 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 func addListDomains(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
 		Name:        "wiki_list_domains",
+		Annotations: readOnly(),
 		Description: "List all domains in the wiki (one-ring, homelab, fiction, etc.). Useful when the caller doesn't know which domain a topic lives in.",
 		InputSchema: &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{}},
 	}
@@ -362,7 +374,8 @@ func addListDomains(server *mcp.Server, store *wiki.Store) {
 
 func addAudit(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
-		Name: "wiki_audit",
+		Name:        "wiki_audit",
+		Annotations: readOnly(),
 		Description: "Audit the link-graph health of a domain. Returns hubs (most-linked-to pages), " +
 			"orphans (pages no one links to), and dangling wikilink targets that don't resolve to any " +
 			"existing page in any domain. Reports state; does NOT mutate. Call this at the end of a " +
