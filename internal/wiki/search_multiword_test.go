@@ -172,3 +172,17 @@ func TestSearch_ExactPhraseBreaksTie(t *testing.T) {
 		t.Errorf("got %v, want zzz-exact first", slugs(hits))
 	}
 }
+
+// A page must match at least half of the query's words (#43 AC3 literal:
+// 'nonexistent river source' shares only 'river' with brandywine-river).
+func TestSearch_MinorityOfWordsIsNotAHit(t *testing.T) {
+	hits := mustSearch(t, brandywineTree(t), "one-ring", "nonexistent mountain river")
+	if len(hits) != 0 {
+		t.Errorf("got %v, want no hits (1 of 3 words)", slugs(hits))
+	}
+	// Exactly half is enough.
+	hits = mustSearch(t, brandywineTree(t), "one-ring", "Brandywine mountain")
+	if len(hits) == 0 || hits[0].Slug != "brandywine-river" {
+		t.Errorf("got %v, want brandywine-river (1 of 2 words)", slugs(hits))
+	}
+}

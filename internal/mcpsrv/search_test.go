@@ -141,14 +141,13 @@ func TestSearchPartialAliasMatch(t *testing.T) {
 	}
 }
 
-// AC3 of wiki-mcp-docker#43, as corrected in the issue comment: a query
-// whose words appear in no page gives zero hits and keeps the import hint.
-// The AC's literal 'nonexistent river source' would now (rightly) find
-// brandywine-river through 'river', so 'mountain' stands in for it. Stop
+// AC3 of wiki-mcp-docker#43: zero hits, with the import hint kept, for the
+// AC's literal query. brandywine-river shares one word ('river') of three;
+// a page has to match at least half of the query's words to count. Stop
 // words alone must not match either.
 func TestSearchNoFalsePositives(t *testing.T) {
 	sess := sessionFor(t, oneRingWithBrandywine(t))
-	for _, q := range []string{"nonexistent mountain source", "the nonexistent of a"} {
+	for _, q := range []string{"nonexistent river source", "nonexistent mountain source", "the nonexistent of a"} {
 		out := callSearch(t, sess, "one-ring", q)
 		if got := out["hits"]; got != float64(0) {
 			t.Errorf("wiki_search(one-ring, %q) hits = %v (%v), want 0", q, got, hitSlugs(out))
@@ -156,5 +155,95 @@ func TestSearchNoFalsePositives(t *testing.T) {
 		if _, ok := out["hint"]; !ok {
 			t.Errorf("zero-hit search %q lost its wiki_import hint", q)
 		}
+	}
+}
+
+// writeWikiFile writes body to root/rel, creating directories.
+func writeWikiFile(t *testing.T, root, rel, body string) {
+	t.Helper()
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The homelab repro from #43: no page is about DNS, and pages that share one
+// generic word ('server') of six must not come back as hits.
+func TestSearchMinorityWordMatchIsNotAHit(t *testing.T) {
+	root := t.TempDir()
+	writeWikiFile(t, root, "homelab/entities/mealie-mcp.md", "---\naliases: [\"Mealie MCP\"]\n---\n\n# Mealie MCP\n\nAn MCP server for recipes.\n")
+	sess := sessionFor(t, root)
+	out := callSearch(t, sess, "homelab", "name-lookup server DNS managed GitOps namespace")
+	if got := out["hits"]; got != float64(0) {
+		t.Errorf("hits = %v (%v), want 0", got, hitSlugs(out))
+	}
+}
+
+func manyPages(t *testing.T, n int) string {
+	t.Helper()
+	root := t.TempDir()
+	for i := 0; i < n; i++ {
+		writeWikiFile(t, root, fmt.Sprintf("fiction/entities/lamp-%02d.md", i), "# Lamp\n\nA lamp.\n")
+	}
+	return root
+}
+
+func callSearchArgs(t *testing.T, sess *mcp.ClientSession, args map[string]any) map[string]any {
+	t.Helper()
+	argsJSON, _ := json.Marshal(args)
+	res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: "wiki_search", Arguments: json.RawMessage(argsJSON)})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("wiki_search errored: %+v", res.Content)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return out
+}
+
+// A broad query must not flood the model's context: by default at most 10
+// results come back, 'hits' still gives the total, and 'truncated' says so.
+func TestWikiSearch_DefaultLimit(t *testing.T) {
+	sess := sessionFor(t, manyPages(t, 14))
+	out := callSearch(t, sess, "fiction", "lamp")
+	if got := len(hitSlugs(out)); got != 10 {
+		t.Errorf("results = %d, want 10", got)
+	}
+	if out["hits"] != float64(14) {
+		t.Errorf("hits = %v, want 14 (the total)", out["hits"])
+	}
+	if out["truncated"] != true {
+		t.Errorf("truncated = %v, want true", out["truncated"])
+	}
+}
+
+func TestWikiSearch_LimitParam(t *testing.T) {
+	sess := sessionFor(t, manyPages(t, 14))
+	out := callSearchArgs(t, sess, map[string]any{"domain": "fiction", "query": "lamp", "limit": 3})
+	if got := len(hitSlugs(out)); got != 3 {
+		t.Errorf("results = %d, want 3", got)
+	}
+	out = callSearchArgs(t, sess, map[string]any{"domain": "fiction", "query": "lamp", "limit": 500})
+	if got := len(hitSlugs(out)); got != 14 {
+		t.Errorf("limit above the total: results = %d, want 14", got)
+	}
+	if _, present := out["truncated"]; present {
+		t.Errorf("nothing was cut, but truncated is set: %v", out["truncated"])
+	}
+}
+
+// The cap has a ceiling so one call cannot ask for the whole domain.
+func TestWikiSearch_LimitCeiling(t *testing.T) {
+	sess := sessionFor(t, manyPages(t, 60))
+	out := callSearchArgs(t, sess, map[string]any{"domain": "fiction", "query": "lamp", "limit": 1000})
+	if got := len(hitSlugs(out)); got != 50 {
+		t.Errorf("results = %d, want 50 (the ceiling)", got)
 	}
 }

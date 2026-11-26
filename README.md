@@ -15,7 +15,7 @@ Phase 3 of dvystrcil/homelab#211.
 | `wiki_neighbors`    | Pages directly linked via `[[wikilink]]`.                |
 | `wiki_write`        | Create / overwrite a page. Refuses to touch `raw/`.      |
 
-Search scoring: the query is split into words (stop words such as "the"/"of" and one-letter words dropped), and each word is matched on its own. Per word, a page earns alias = 10, slug = 8, title (first `#` heading) = 8, tag = 5, body = 1; its score is that sum times the number of query words it matched, plus one field weight when the whole query appears verbatim. A page matching none of the words is not returned.
+Search scoring: the query is split into words (stop words such as "the"/"of" and one-letter words dropped), and each word is matched on its own. Per word, a page earns alias = 10, slug = 8, title (first `#` heading) = 8, tag = 5, body = 1; its score is that sum times the number of query words it matched, plus one field weight when the whole query appears verbatim. A page must match at least half of the query words to be returned. `wiki_search` returns at most `limit` results (default 10, max 50); `hits` is the total and `truncated` is set when results were cut.
 
 ## Storage
 

@@ -234,7 +234,8 @@ func (s *Store) Lookup(domain, slug string) (Page, error) {
 // body 1. A page's score is that sum times the number of query words it
 // matched, so covering more of the query beats one strong field. The whole
 // query appearing verbatim in a field earns that field's weight once more.
-// A page matching no word is not returned (wiki-mcp-docker#43).
+// A page must match at least half of the query words to be returned, so one
+// shared word out of three is not a hit (wiki-mcp-docker#43).
 func (s *Store) Search(domain, query string) ([]Page, error) {
 	pages, err := s.ListPages(domain)
 	if err != nil {
@@ -259,7 +260,7 @@ func (s *Store) Search(domain, query string) ([]Page, error) {
 				matched++
 			}
 		}
-		if matched == 0 {
+		if 2*matched < len(terms) {
 			continue
 		}
 		score := sum * matched
