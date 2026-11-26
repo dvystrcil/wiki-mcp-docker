@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // PageTypeDirs are the four canonical type directories under each domain.
@@ -223,40 +224,49 @@ func (s *Store) Lookup(domain, slug string) (Page, error) {
 	return Page{}, fmt.Errorf("%w: %q in domain %q", ErrPageNotFound, slug, domain)
 }
 
-// Search returns pages where `query` (case-insensitive) appears in body,
-// title (first h1), aliases, or tags. Results sorted by relevance.
+// Search returns the pages that match any word of `query`, best first.
+//
+// The query is lowercased and split into words on anything that is not a
+// letter or digit ('name-lookup' -> name, lookup). Stop words and one-letter
+// words are dropped, unless that would leave nothing to search for. Each word
+// is matched as a substring of each field, and a page earns, per word, the
+// weight of every field it hits: alias 10, slug 8, title (first h1) 8, tag 5,
+// body 1. A page's score is that sum times the number of query words it
+// matched, so covering more of the query beats one strong field. The whole
+// query appearing verbatim in a field earns that field's weight once more.
+// A page matching no word is not returned (wiki-mcp-docker#43).
 func (s *Store) Search(domain, query string) ([]Page, error) {
 	pages, err := s.ListPages(domain)
 	if err != nil {
 		return nil, err
 	}
-	q := strings.ToLower(query)
+	phrase := strings.ToLower(strings.TrimSpace(query))
+	terms := queryTerms(phrase)
+	if len(terms) == 0 {
+		return []Page{}, nil
+	}
 	type scored struct {
 		page  Page
 		score int
 	}
 	hits := []scored{}
 	for _, p := range pages {
-		score := 0
-		for _, a := range p.Aliases {
-			if strings.Contains(strings.ToLower(a), q) {
-				score += 10
+		f := searchFieldsOf(p)
+		sum, matched := 0, 0
+		for _, t := range terms {
+			if w := f.weight(t); w > 0 {
+				sum += w
+				matched++
 			}
 		}
-		for _, t := range p.Tags {
-			if strings.Contains(strings.ToLower(t), q) {
-				score += 5
-			}
+		if matched == 0 {
+			continue
 		}
-		if strings.Contains(p.Slug, q) {
-			score += 8
+		score := sum * matched
+		if len(terms) > 1 || phrase != terms[0] {
+			score += f.weight(phrase)
 		}
-		if strings.Contains(strings.ToLower(p.Body), q) {
-			score++
-		}
-		if score > 0 {
-			hits = append(hits, scored{page: p, score: score})
-		}
+		hits = append(hits, scored{page: p, score: score})
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		if hits[i].score != hits[j].score {
@@ -269,6 +279,111 @@ func (s *Store) Search(domain, query string) ([]Page, error) {
 		out[i] = h.page
 	}
 	return out, nil
+}
+
+// Field weights for Search.
+const (
+	weightAlias = 10
+	weightSlug  = 8
+	weightTitle = 8
+	weightTag   = 5
+	weightBody  = 1
+)
+
+// stopWords are dropped from multi-word queries: they occur in nearly every
+// page body, so matching them would return the whole domain.
+var stopWords = map[string]bool{
+	"a": true, "an": true, "and": true, "are": true, "as": true, "at": true,
+	"be": true, "by": true, "does": true, "for": true, "from": true, "has": true,
+	"how": true, "in": true, "into": true, "is": true, "it": true, "its": true,
+	"of": true, "on": true, "or": true, "that": true, "the": true, "this": true,
+	"to": true, "was": true, "what": true, "when": true, "where": true,
+	"which": true, "who": true, "why": true, "with": true,
+}
+
+// queryTerms splits a lowercased query into distinct search words, dropping
+// stop words and one-letter words unless nothing else is left.
+func queryTerms(q string) []string {
+	words := strings.FieldsFunc(q, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	var kept, all []string
+	seen := map[string]bool{}
+	for _, w := range words {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
+		all = append(all, w)
+		if len([]rune(w)) > 1 && !stopWords[w] {
+			kept = append(kept, w)
+		}
+	}
+	if len(kept) == 0 {
+		return all
+	}
+	return kept
+}
+
+// searchFields is a page's searchable text, lowercased once per Search.
+type searchFields struct {
+	aliases, tags     []string
+	slug, title, body string
+}
+
+func searchFieldsOf(p Page) searchFields {
+	f := searchFields{
+		slug:  strings.ToLower(p.Slug),
+		title: strings.ToLower(pageTitle(p.Body)),
+		body:  strings.ToLower(p.Body),
+	}
+	for _, a := range p.Aliases {
+		f.aliases = append(f.aliases, strings.ToLower(a))
+	}
+	for _, t := range p.Tags {
+		f.tags = append(f.tags, strings.ToLower(t))
+	}
+	return f
+}
+
+// weight is the sum of the weights of the fields that contain t.
+func (f searchFields) weight(t string) int {
+	w := 0
+	if anyContains(f.aliases, t) {
+		w += weightAlias
+	}
+	if strings.Contains(f.slug, t) {
+		w += weightSlug
+	}
+	if f.title != "" && strings.Contains(f.title, t) {
+		w += weightTitle
+	}
+	if anyContains(f.tags, t) {
+		w += weightTag
+	}
+	if strings.Contains(f.body, t) {
+		w += weightBody
+	}
+	return w
+}
+
+func anyContains(list []string, t string) bool {
+	for _, s := range list {
+		if strings.Contains(s, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// pageTitle is the text of the body's first level-1 heading, or "".
+func pageTitle(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(line[2:])
+		}
+	}
+	return ""
 }
 
 // Neighbors returns pages directly linked from the given page's body via
