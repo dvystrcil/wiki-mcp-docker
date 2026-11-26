@@ -186,18 +186,27 @@ func notFoundMessage(domain, slug string, err error) string {
 
 // ---- tool: wiki_search ----
 
+// A broad query can match most of a domain; every result costs the model
+// context, so wiki_search returns the best few unless asked (#43).
+const (
+	searchDefaultLimit = 10
+	searchMaxLimit     = 50
+)
+
 func addSearch(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
 		Name:        "wiki_search",
 		Annotations: readOnly(),
 		Description: "Search a domain's wiki pages by keyword. Each query word is matched on its own against aliases, slug, title, tags, and body — case-insensitive. " +
-			"Returns every page matching at least one word, best first (more words matched, and alias/slug/title hits, rank higher). Returns the metadata of each hit; " +
+			"Returns pages matching at least half of the words, best first (more words matched, and alias/slug/title hits, rank higher). " +
+			"`hits` is the total; at most `limit` results (default 10) are returned, and `truncated` is true when more matched. Returns the metadata of each hit; " +
 			"call wiki_lookup to retrieve full page bodies.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
 				"domain": {Type: "string", Description: "Wiki domain to search within."},
 				"query":  {Type: "string", Description: "Keywords to match; words are matched independently, so extra words do not hide a page."},
+				"limit":  {Type: "integer", Description: "Optional. Most results to return, best first. Default 10, maximum 50."},
 			},
 			Required: []string{"domain", "query"},
 		},
@@ -206,6 +215,7 @@ func addSearch(server *mcp.Server, store *wiki.Store) {
 		var args struct {
 			Domain string `json:"domain"`
 			Query  string `json:"query"`
+			Limit  int    `json:"limit"`
 		}
 		if e := decodeArgs(req, &args); e != nil {
 			return e, nil
@@ -214,15 +224,24 @@ func addSearch(server *mcp.Server, store *wiki.Store) {
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
-		results := make([]map[string]any, len(pages))
-		for i, p := range pages {
+		limit := args.Limit
+		if limit <= 0 {
+			limit = searchDefaultLimit
+		}
+		limit = min(limit, searchMaxLimit)
+		shown := pages[:min(limit, len(pages))]
+		results := make([]map[string]any, len(shown))
+		for i, p := range shown {
 			results[i] = pageSummary(p, false)
 		}
 		out := map[string]any{
 			"domain":  args.Domain,
 			"query":   args.Query,
-			"hits":    len(results),
+			"hits":    len(pages),
 			"results": results,
+		}
+		if len(shown) < len(pages) {
+			out["truncated"] = true
 		}
 		if len(results) == 0 && importableDomains[args.Domain] {
 			out["hint"] = zeroHitHint(args.Domain, args.Query)
