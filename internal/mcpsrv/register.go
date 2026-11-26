@@ -190,14 +190,14 @@ func addSearch(server *mcp.Server, store *wiki.Store) {
 	tool := &mcp.Tool{
 		Name:        "wiki_search",
 		Annotations: readOnly(),
-		Description: "Search a domain's wiki pages by keyword. Matches against aliases, tags, slug, and body — case-insensitive. " +
-			"Returns pages sorted by relevance (alias/tag hits > slug hits > body hits). Returns the metadata of each hit; " +
+		Description: "Search a domain's wiki pages by keyword. Each query word is matched on its own against aliases, slug, title, tags, and body — case-insensitive. " +
+			"Returns every page matching at least one word, best first (more words matched, and alias/slug/title hits, rank higher). Returns the metadata of each hit; " +
 			"call wiki_lookup to retrieve full page bodies.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
 				"domain": {Type: "string", Description: "Wiki domain to search within."},
-				"query":  {Type: "string", Description: "Keyword or phrase to match."},
+				"query":  {Type: "string", Description: "Keywords to match; words are matched independently, so extra words do not hide a page."},
 			},
 			Required: []string{"domain", "query"},
 		},

@@ -2,6 +2,9 @@ package mcpsrv
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -74,5 +77,84 @@ func TestWikiSearch_ZeroHitNoHintForOtherDomains(t *testing.T) {
 	}
 	if _, present := out["hint"]; present {
 		t.Errorf("wiki_import hinted for a domain it cannot serve: %v", out["hint"])
+	}
+}
+
+// oneRingWithBrandywine is the one-ring shape from wiki-mcp-docker#43: the
+// page exists with alias 'Brandywine', and a second page that shares none
+// of the AC3 query words.
+func oneRingWithBrandywine(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel, body string) {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("one-ring/entities/brandywine-river.md", `---
+type: entity
+domain: one-ring
+aliases: ["Brandywine River", "Brandywine"]
+tags: [place]
+---
+
+# Brandywine River
+
+Bounds the Shire to the east.
+`)
+	write("one-ring/entities/strider.md", `---
+type: entity
+domain: one-ring
+aliases: ["Aragorn"]
+---
+
+# Strider
+
+A Ranger of the North.
+`)
+	return root
+}
+
+func hitSlugs(out map[string]any) []string {
+	results, _ := out["results"].([]any)
+	var s []string
+	for _, r := range results {
+		m, _ := r.(map[string]any)
+		s = append(s, fmt.Sprint(m["slug"]))
+	}
+	return s
+}
+
+// AC1 + AC2 of wiki-mcp-docker#43.
+func TestSearchPartialAliasMatch(t *testing.T) {
+	sess := sessionFor(t, oneRingWithBrandywine(t))
+	for _, q := range []string{"Brandywine river source", "Brandywine source"} {
+		out := callSearch(t, sess, "one-ring", q)
+		got := hitSlugs(out)
+		if len(got) == 0 || got[0] != "brandywine-river" {
+			t.Errorf("wiki_search(one-ring, %q) = %v, want brandywine-river first", q, got)
+		}
+	}
+}
+
+// AC3 of wiki-mcp-docker#43, as corrected in the issue comment: a query
+// whose words appear in no page gives zero hits and keeps the import hint.
+// The AC's literal 'nonexistent river source' would now (rightly) find
+// brandywine-river through 'river', so 'mountain' stands in for it. Stop
+// words alone must not match either.
+func TestSearchNoFalsePositives(t *testing.T) {
+	sess := sessionFor(t, oneRingWithBrandywine(t))
+	for _, q := range []string{"nonexistent mountain source", "the nonexistent of a"} {
+		out := callSearch(t, sess, "one-ring", q)
+		if got := out["hits"]; got != float64(0) {
+			t.Errorf("wiki_search(one-ring, %q) hits = %v (%v), want 0", q, got, hitSlugs(out))
+		}
+		if _, ok := out["hint"]; !ok {
+			t.Errorf("zero-hit search %q lost its wiki_import hint", q)
+		}
 	}
 }

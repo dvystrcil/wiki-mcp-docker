@@ -16,7 +16,12 @@ import (
 // fixture wiki tree and returns a connected session.
 func lookupSession(t *testing.T) *mcp.ClientSession {
 	t.Helper()
-	root := wikiFixture(t)
+	return sessionFor(t, wikiFixture(t))
+}
+
+// sessionFor serves RegisterAll over the wiki tree at root.
+func sessionFor(t *testing.T, root string) *mcp.ClientSession {
+	t.Helper()
 	store, err := wiki.NewStore(root)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
