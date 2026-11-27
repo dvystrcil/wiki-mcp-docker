@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dvystrcil/wiki-mcp-docker/internal/wiki"
@@ -94,5 +95,25 @@ func TestWikiWrite_WithoutSchemaSaysSoInsteadOfLookingClean(t *testing.T) {
 	out := callWrite(t, store, "no frontmatter at all")
 	if out["schema_checked"] != false {
 		t.Fatalf("an unchecked write must say so: schema_checked=%v", out["schema_checked"])
+	}
+}
+
+// wiki_write escapes [[slug|Display]] inside table rows before saving, and
+// says how many it changed so the model knows its body was rewritten.
+func TestWikiWrite_EscapesTableWikilinksOnSave(t *testing.T) {
+	store, _ := storeWithSchema(t)
+	out := callWrite(t, store, "---\ntype: entity\ndomain: fiction\n---\n## Identity\n\n| Person | Note |\n|---|---|\n| [[jen|Jen Chan]] | Sister |\n\n## Related\n- [[jen|Jen Chan]]\n")
+	if got, _ := out["escaped_table_links"].(float64); got != 1 {
+		t.Errorf("escaped_table_links = %v; want 1", out["escaped_table_links"])
+	}
+	p, err := store.Lookup("fiction", "zeta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Body, "| [[jen\\|Jen Chan]] | Sister |") {
+		t.Errorf("table row not escaped on disk:\n%s", p.Body)
+	}
+	if !strings.Contains(p.Body, "- [[jen|Jen Chan]]") {
+		t.Errorf("non-table link was changed:\n%s", p.Body)
 	}
 }
