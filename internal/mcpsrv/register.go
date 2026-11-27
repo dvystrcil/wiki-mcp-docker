@@ -328,7 +328,9 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 			"(missing frontmatter `type`, missing required frontmatter keys, missing required `## ` sections, " +
 			"type/domain not matching the path). The page IS written either way; if the list is non-empty, " +
 			"rewrite the page to fix every entry before moving on. `schema_checked: false` means no schema " +
-			"was available, not that the page is clean.",
+			"was available, not that the page is clean. " +
+			"`escaped_table_links` counts [[slug|Display]] links inside markdown table rows that were saved as " +
+			"[[slug\\|Display]] (an unescaped pipe splits the table cell); the saved body differs from yours by exactly that.",
 		InputSchema: &jsonschema.Schema{
 			Type: "object",
 			Properties: map[string]*jsonschema.Schema{
@@ -350,6 +352,10 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 		if e := decodeArgs(req, &args); e != nil {
 			return e, nil
 		}
+		// A table row's [[slug|Display]] renders as two broken cells on
+		// Quartz; save the escaped form and report how many were changed.
+		body, escaped := wiki.EscapeTableWikilinks(args.Body)
+		args.Body = body
 		if err := store.Write(args.Domain, args.Type, args.Slug, args.Body); err != nil {
 			return errorResult(err.Error()), nil
 		}
@@ -362,11 +368,12 @@ func addWrite(server *mcp.Server, store *wiki.Store) {
 		// fixes them next turn instead of a human weeks later.
 		violations, checked := store.ValidatePage(args.Domain, args.Type, args.Body)
 		return jsonResult(map[string]any{
-			"path":              fmt.Sprintf("wiki/%s/%s/%s.md", args.Domain, args.Type, args.Slug),
-			"bytes":             len(args.Body),
-			"dangling":          dangling,
-			"schema_checked":    checked,
-			"schema_violations": violations,
+			"path":                fmt.Sprintf("wiki/%s/%s/%s.md", args.Domain, args.Type, args.Slug),
+			"bytes":               len(args.Body),
+			"dangling":            dangling,
+			"schema_checked":      checked,
+			"schema_violations":   violations,
+			"escaped_table_links": escaped,
 		}), nil
 	})
 }
