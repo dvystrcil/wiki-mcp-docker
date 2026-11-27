@@ -399,7 +399,7 @@ func (s *Store) Neighbors(domain, slug string) ([]Page, error) {
 	seen := map[string]bool{}
 	out := []Page{}
 	for _, m := range wikilinkRe.FindAllStringSubmatch(p.Body, -1) {
-		target := strings.TrimSpace(m[1])
+		target := linkTarget(m[1])
 		parts := strings.Split(target, "/")
 		clean := []string{}
 		for _, x := range parts {
@@ -503,7 +503,7 @@ func (s *Store) Audit(domain string) (AuditReport, error) {
 	for _, p := range pages {
 		seen := map[string]bool{}
 		for _, m := range wikilinkRe.FindAllStringSubmatch(p.Body, -1) {
-			target := strings.TrimSpace(m[1])
+			target := linkTarget(m[1])
 			parts := strings.Split(target, "/")
 			clean := []string{}
 			for _, x := range parts {
@@ -609,6 +609,13 @@ func (s *Store) Audit(domain string) (AuditReport, error) {
 	return report, nil
 }
 
+// linkTarget cleans a captured wikilink target. Inside a markdown table
+// the display pipe is escaped ([[slug\|Display]]), so the capture ends in
+// a backslash that belongs to the table syntax, not the slug.
+func linkTarget(raw string) string {
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(raw), `\`))
+}
+
 // isRawRef reports whether a wikilink target points at a raw source file
 // ([[../../raw/sources/fiction/x.odt]]) rather than a wiki page. Those are
 // not page links, so the dangling checks leave them alone.
@@ -631,7 +638,7 @@ func (s *Store) DanglingInBody(domain, body string) ([]string, error) {
 	seen := map[string]bool{}
 	dangling := []string{}
 	for _, m := range wikilinkRe.FindAllStringSubmatch(body, -1) {
-		target := strings.TrimSpace(m[1])
+		target := linkTarget(m[1])
 		parts := strings.Split(target, "/")
 		clean := []string{}
 		for _, x := range parts {

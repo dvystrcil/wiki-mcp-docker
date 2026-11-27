@@ -536,3 +536,20 @@ func TestAudit_FlagsNameFormTargets(t *testing.T) {
 	}
 	t.Errorf("Audit dangling = %+v; want an entry for %q", report.Dangling, "Jen Chan")
 }
+
+// Inside a markdown table the pipe in [[slug|Display]] is escaped as
+// [[slug\|Display]] (llm-wiki's rebuild_index.py writes these). The
+// backslash belongs to the table syntax, not the slug, so the link must
+// resolve rather than be reported as a name-form dangling target.
+func TestDanglingInBody_EscapedTablePipeResolves(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	body := "| Page | Note |\n|---|---|\n| [[strider\\|Strider]] | ok |\n"
+	dangling, err := s.DanglingInBody("one-ring", body)
+	if err != nil {
+		t.Fatalf("DanglingInBody: %v", err)
+	}
+	if len(dangling) != 0 {
+		t.Errorf("dangling = %q; want none ([[strider\\|Strider]] is a table-escaped link)", dangling)
+	}
+}
