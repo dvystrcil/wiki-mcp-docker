@@ -9,6 +9,7 @@ package wiki
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -495,4 +496,43 @@ func TestAudit_DoesNotFlagCrossDomainResolved(t *testing.T) {
 			t.Errorf("campaign-chronicle should resolve cross-section in one-ring, but flagged as dangling")
 		}
 	}
+}
+
+// A wikilink written as a display name ([[Jen Chan]]) instead of a slug
+// never resolves. It used to be skipped as "not a slug", so wiki_write
+// reported no dangling links and 111 of them shipped in fiction/
+// (llm-wiki#61). It must be reported, verbatim, so the writer can fix it.
+// A link to a raw source file is not a page link and stays exempt.
+func TestDanglingInBody_FlagsNameFormTargets(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	body := "## Related\n\n- [[strider]]\n- [[Jen Chan]]\n- [[Tom (protagonist)|Tom]]\n" +
+		"- [[../../raw/sources/fiction/standing-patrol/book-1.odt]]\n"
+	dangling, err := s.DanglingInBody("one-ring", body)
+	if err != nil {
+		t.Fatalf("DanglingInBody: %v", err)
+	}
+	want := []string{"Jen Chan", "Tom (protagonist)"}
+	if fmt.Sprint(dangling) != fmt.Sprint(want) {
+		t.Errorf("dangling = %q; want %q", dangling, want)
+	}
+}
+
+func TestAudit_FlagsNameFormTargets(t *testing.T) {
+	root := fixtureTree(t)
+	s, _ := NewStore(root)
+	body := "---\ntype: entity\ndomain: one-ring\n---\n# Bilbo\n\n## Related\n\n- [[strider]]\n- [[Jen Chan]]\n"
+	if err := s.Write("one-ring", "entities", "bilbo", body); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	report, err := s.Audit("one-ring")
+	if err != nil {
+		t.Fatalf("Audit: %v", err)
+	}
+	for _, d := range report.Dangling {
+		if d.Slug == "Jen Chan" {
+			return
+		}
+	}
+	t.Errorf("Audit dangling = %+v; want an entry for %q", report.Dangling, "Jen Chan")
 }

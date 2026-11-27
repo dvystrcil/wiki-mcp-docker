@@ -517,6 +517,13 @@ func (s *Store) Audit(domain string) (AuditReport, error) {
 			}
 			linkSlug := strings.TrimSuffix(clean[len(clean)-1], ".md")
 			if !slugRe.MatchString(linkSlug) {
+				// Name-form link: never resolves (see DanglingInBody).
+				if !isRawRef(target) {
+					if dangling[target] == nil {
+						dangling[target] = make(map[string]bool)
+					}
+					dangling[target][p.Slug] = true
+				}
 				continue
 			}
 			if linkSlug == p.Slug || seen[linkSlug] {
@@ -602,6 +609,13 @@ func (s *Store) Audit(domain string) (AuditReport, error) {
 	return report, nil
 }
 
+// isRawRef reports whether a wikilink target points at a raw source file
+// ([[../../raw/sources/fiction/x.odt]]) rather than a wiki page. Those are
+// not page links, so the dangling checks leave them alone.
+func isRawRef(target string) bool {
+	return strings.HasPrefix(target, "raw/") || strings.Contains(target, "/raw/")
+}
+
 // DanglingInBody scans the given page body for [[wikilink]] targets
 // and returns those that don't resolve to any existing page in any
 // domain. Same resolution semantics as Neighbors and Audit (in-domain
@@ -631,6 +645,12 @@ func (s *Store) DanglingInBody(domain, body string) ([]string, error) {
 		}
 		linkSlug := strings.TrimSuffix(clean[len(clean)-1], ".md")
 		if !slugRe.MatchString(linkSlug) {
+			// A name-form link ([[Jen Chan]]) can never resolve; report it
+			// verbatim so the writer fixes it (llm-wiki#61).
+			if !isRawRef(target) && !seen[target] {
+				seen[target] = true
+				dangling = append(dangling, target)
+			}
 			continue
 		}
 		if seen[linkSlug] {
